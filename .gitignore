@@ -2,6 +2,9 @@
 *.wasm
 .DS_Store
 
+# Never commit a real keystore token — .env.example is the template.
+.env
+
 # Cargo.lock IS committed here, overriding any global ignore.
 #
 # OutLayer compiles this example inside the enclave and attests the hash of the

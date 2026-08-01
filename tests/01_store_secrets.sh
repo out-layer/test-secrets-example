@@ -94,12 +94,15 @@ store_secret() {
 
     # Build JSON args (use printf to avoid shell interpretation of backslashes)
     local json_args
+    # `accessor` replaced the flat repo/branch pair, and `vault_id` must be present
+    # even when null: near-sdk's argument deserialiser rejects JSON that omits a
+    # required Option field (see contract/src/secrets.rs).
     json_args=$(printf '{
-  "repo": "%s",
-  "branch": "%s",
+  "accessor": { "Repo": { "repo": "%s", "branch": "%s" } },
   "profile": "%s",
   "encrypted_secrets_base64": "%s",
-  "access": %s
+  "access": %s,
+  "vault_id": null
 }' "$REPO" "$BRANCH" "$profile" "$encrypted_base64" "$access_condition")
 
     if [ "$SEND_TO_CHAIN" = true ]; then
@@ -290,11 +293,11 @@ for test_num in "${TESTS_TO_RUN[@]}"; do
 
             # Build JSON args
             json_args=$(printf '{
-  "repo": "%s",
-  "branch": "%s",
+  "accessor": { "Repo": { "repo": "%s", "branch": "%s" } },
   "profile": "%s",
   "encrypted_secrets_base64": "%s",
-  "access": "AllowAll"
+  "access": "AllowAll",
+  "vault_id": null
 }' "$REPO" "$BRANCH" "test15_invalid_json" "$encrypted_base64")
 
             if [ "$SEND_TO_CHAIN" = true ]; then

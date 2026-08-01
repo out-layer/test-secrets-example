@@ -94,16 +94,26 @@ request_execution() {
     local json_args
     json_args=$(cat <<EOF
 {
-  "code_source": {
-    "repo": "$REPO",
-    "commit": "$BRANCH",
-    "build_target": "wasm32-wasip1"
+  "source": {
+    "GitHub": {
+      "repo": "$REPO",
+      "commit": "$BRANCH",
+      "build_target": "wasm32-wasip2"
+    }
   },
+  "resource_limits": {
+    "max_instructions": 1000000000,
+    "max_memory_mb": 128,
+    "max_execution_seconds": 60
+  },
+  "input_data": "{\"message\":\"test\"}",
   "secrets_ref": {
     "profile": "$profile",
     "account_id": "$OWNER"
   },
-  "input_data": "{\"message\":\"test\"}"
+  "response_format": null,
+  "payer_account_id": null,
+  "params": null
 }
 EOF
 )
@@ -141,7 +151,12 @@ EOF
         local result_icon=""
         local result_msg=""
 
-        if echo "$output" | grep -q "SECRET found"; then
+        # The module reports per-key results as JSON, e.g.
+        #   {"key":"SECRET","found":true,"value":"..."}
+        # which arrives escaped inside the transaction output. The old pattern looked
+        # for a literal "SECRET found" string that no version of the module emits, so
+        # every run fell through to the catch-all failure branch.
+        if echo "$output" | grep -qE '\\?"found\\?":[[:space:]]*true'; then
             # Execution succeeded and secret was found
             actual_result="SUCCESS"
             result_icon="🔓"

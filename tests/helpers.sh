@@ -74,10 +74,19 @@ encrypt_secrets_json() {
 
     echo "🔑 Seed: $seed" >&2
 
-    # Get public key from keystore
+    # Get public key from keystore.
+    #
+    # POST with a JSON body, not GET with a query string: the keystore validates the
+    # secrets alongside the seed (reserved keywords such as NEAR_SENDER_ID are rejected
+    # here rather than at execution time), so `secrets_json` is part of the request.
+    # A GET against this route answers 405.
     local pubkey_response
-    pubkey_response=$(curl -s -H "Authorization: Bearer $KEYSTORE_AUTH_TOKEN" \
-        "$KEYSTORE_BASE_URL/pubkey?seed=$(printf %s "$seed" | jq -sRr @uri)")
+    pubkey_response=$(curl -s -X POST \
+        -H "Authorization: Bearer $KEYSTORE_AUTH_TOKEN" \
+        -H "Content-Type: application/json" \
+        --data "$(jq -n --arg seed "$seed" --arg secrets "$secrets_json" \
+            '{seed: $seed, secrets_json: $secrets}')" \
+        "$KEYSTORE_BASE_URL/pubkey")
 
     if [ $? -ne 0 ]; then
         echo "Error: Failed to connect to keystore at $KEYSTORE_BASE_URL" >&2
@@ -95,32 +104,38 @@ encrypt_secrets_json() {
 
     echo "✅ Got pubkey: ${pubkey:0:16}..." >&2
 
-    # Encrypt using Python inline script (same XOR logic as keystore)
+    # Encrypt with ECIES v1 — the format the keystore expects.
+    #
+    # Wire format (see keystore-worker/src/crypto.rs::decrypt_ecies):
+    #   0x01 | ephemeral_x25519_pubkey (32) | nonce (12) | ciphertext | tag (16)
+    #
+    # /pubkey returns the recipient's X25519 public key in hex, so this is a plain
+    # ECDH + HKDF-SHA256(info="outlayer-keystore-v1") + ChaCha20-Poly1305 with empty
+    # associated data. The previous implementation here XOR-ed the plaintext against
+    # SHA256(pubkey || "keystore-encryption-v1"), a scheme the keystore no longer
+    # accepts — it failed at execution time with "Failed to decrypt secrets".
     local encrypted_base64
-    encrypted_base64=$(python3 -c "
-import sys
-import hashlib
-import base64
+    encrypted_base64=$(SECRETS_PLAINTEXT="$secrets_json" PUBKEY_HEX="$pubkey" python3 -c "
+import os, base64
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
-pubkey_hex = '$pubkey'
-plaintext = '''$secrets_json'''
-
-# Derive symmetric key (same as keystore)
-key_material = bytes.fromhex(pubkey_hex)
-hasher = hashlib.sha256()
-hasher.update(key_material)
-hasher.update(b'keystore-encryption-v1')
-derived_key = hasher.digest()
-
-# XOR encryption
-plaintext_bytes = plaintext.encode('utf-8')
-ciphertext = bytes(
-    b ^ derived_key[i % len(derived_key)]
-    for i, b in enumerate(plaintext_bytes)
+recipient = X25519PublicKey.from_public_bytes(bytes.fromhex(os.environ['PUBKEY_HEX']))
+ephemeral = X25519PrivateKey.generate()
+eph_pub = ephemeral.public_key().public_bytes(
+    encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw
 )
 
-# Output base64
-print(base64.b64encode(ciphertext).decode('ascii'))
+shared = ephemeral.exchange(recipient)
+key = HKDF(algorithm=hashes.SHA256(), length=32, salt=None,
+           info=b'outlayer-keystore-v1').derive(shared)
+
+nonce = os.urandom(12)
+ct = ChaCha20Poly1305(key).encrypt(nonce, os.environ['SECRETS_PLAINTEXT'].encode(), None)
+
+print(base64.b64encode(bytes([0x01]) + eph_pub + nonce + ct).decode('ascii'))
 " 2>&1)
 
     if [ $? -ne 0 ]; then
