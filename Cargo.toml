@@ -1,11 +1,12 @@
 [package]
-name = "test-secrets-ark"
+name = "test-secrets-example"
 version = "0.1.0"
 edition = "2021"
+license = "MIT OR Apache-2.0"
 description = "Test WASM for OutLayer secrets via environment variables"
 
 [[bin]]
-name = "test-secrets-ark"
+name = "test-secrets-example"
 path = "src/main.rs"
 
 [dependencies]

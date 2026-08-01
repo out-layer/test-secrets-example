@@ -4,7 +4,7 @@ WASI WASM project for testing encrypted secrets with different access conditions
 
 ## Overview
 
-**test-secrets-ark** is a WASI P1 application that:
+**test-secrets-example** is a WASI P2 application that:
 - Reads JSON input from stdin (required by NEAR OutLayer)
 - Reads the `SECRET` environment variable from WASI env
 - Returns JSON output to stdout with secret status
@@ -13,18 +13,18 @@ This verifies:
 1. Secrets are correctly decrypted by the keystore
 2. Access control conditions are properly validated
 3. WASI environment variables injection works
-4. Proper WASI P1 stdin/stdout JSON format
+4. Proper WASI P2 stdin/stdout JSON format
 
 ## Build
 
 ```bash
-# Ensure wasm32-wasip1 target is installed
-rustup target add wasm32-wasip1
+# Ensure wasm32-wasip2 target is installed
+rustup target add wasm32-wasip2
 
 # Build
 ./build.sh
 
-# Output: target/wasm32-wasip1/release/test-secrets-ark.wasm
+# Output: target/wasm32-wasip2/release/test-secrets-example.wasm
 ```
 
 ## Test Suite
@@ -36,7 +36,7 @@ All test settings are centralized in [tests/test_config.sh](tests/test_config.sh
 ```bash
 # Edit this file to customize:
 export CONTRACT="outlayer.testnet"
-export REPO="github.com/test-user/test-secrets-ark"
+export REPO="github.com/test-user/test-secrets-example"
 export OWNER="owner.testnet"
 
 # Test accounts for each scenario
@@ -63,7 +63,7 @@ export TEST6_ALLOWED_ACCOUNTS=("rich.testnet")
 
 4. **GitHub repository:**
    - Edit `REPO` in `tests/test_config.sh`
-   - Upload `test-secrets-ark.wasm` to the repo
+   - Upload `test-secrets-example.wasm` to the repo
 
 ### Quick Local Test
 
@@ -72,13 +72,13 @@ export TEST6_ALLOWED_ACCOUNTS=("rich.testnet")
 ./build.sh
 
 # Test locally without secrets
-echo '{"message":"test"}' | wasmtime target/wasm32-wasip1/release/test-secrets-ark.wasm
+echo '{"message":"test"}' | wasmtime target/wasm32-wasip2/release/test-secrets-example.wasm
 
 # Expected output:
 # {"status":"error","secret_value":null,"secret_found":false,"message":"SECRET environment variable not found"}
 
 # Test with SECRET env var
-echo '{"message":"test"}' | wasmtime --env SECRET=my-secret-value target/wasm32-wasip1/release/test-secrets-ark.wasm
+echo '{"message":"test"}' | wasmtime --env SECRET=my-secret-value target/wasm32-wasip2/release/test-secrets-example.wasm
 
 # Expected output:
 # {"status":"success","secret_value":"my-secret-value","secret_found":true,"message":"SECRET found! Value: my-secret-value"}
@@ -101,13 +101,13 @@ export TEST2_DENIED_ACCOUNTS=("other.testnet")
 cd ../../keystore-worker/
 
 # Run all tests (1-13)
-bash ../wasi-examples/test-secrets-ark/tests/01_store_secrets.sh
+bash ../wasi-examples/test-secrets-example/tests/01_store_secrets.sh
 
 # Run specific tests only
-bash ../wasi-examples/test-secrets-ark/tests/01_store_secrets.sh 1 2 3
+bash ../wasi-examples/test-secrets-example/tests/01_store_secrets.sh 1 2 3
 
 # Run single test
-bash ../wasi-examples/test-secrets-ark/tests/01_store_secrets.sh 2
+bash ../wasi-examples/test-secrets-example/tests/01_store_secrets.sh 2
 ```
 
 The script generates `near call` commands for storing secrets. Available tests:
@@ -136,13 +136,13 @@ The script generates `near call` commands for storing secrets. Available tests:
 # From keystore-worker/ directory
 
 # Run all tests
-bash ../wasi-examples/test-secrets-ark/tests/02_request_execution.sh
+bash ../wasi-examples/test-secrets-example/tests/02_request_execution.sh
 
 # Run specific tests only
-bash ../wasi-examples/test-secrets-ark/tests/02_request_execution.sh 1 2 3
+bash ../wasi-examples/test-secrets-example/tests/02_request_execution.sh 1 2 3
 
 # Run single test
-bash ../wasi-examples/test-secrets-ark/tests/02_request_execution.sh 2
+bash ../wasi-examples/test-secrets-example/tests/02_request_execution.sh 2
 ```
 
 The script generates `near call` commands using accounts from `test_config.sh`. For each test:

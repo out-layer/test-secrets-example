@@ -6,7 +6,7 @@
 # CONTRACT & REPO SETTINGS
 # =============================================================================
 export CONTRACT="outlayer.testnet"
-export REPO="https://github.com/zavodil/test-secrets-ark"
+export REPO="https://github.com/out-layer/test-secrets-example"
 export BRANCH="main"
 export OWNER="zavodil.testnet"
 

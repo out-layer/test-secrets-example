@@ -56,7 +56,7 @@ if [ "$VERBOSE" = true ]; then
     echo "Prerequisites:"
     echo "1. Run 01_store_secrets.sh first"
     echo "2. Coordinator + worker + keystore running"
-    echo "3. Upload test-secrets-ark.wasm to GitHub repo: $REPO"
+    echo "3. Upload test-secrets-example.wasm to GitHub repo: $REPO"
     echo ""
 else
     echo "Tests: ${TESTS_TO_RUN[@]} | Repo: $REPO | Send: $SEND_TO_CHAIN"
