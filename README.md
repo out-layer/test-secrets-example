@@ -356,7 +356,7 @@ Before running tests, you may need to:
 
 **Secrets not decrypting:**
 - Check keystore worker is running on port 8081
-- Verify worker can reach keystore (`KEYSTORE_BASE_URL` in worker `.env`)
+- Verify worker can reach keystore (`KEYSTORE_BASE_URLS` in worker `.env`)
 - Check worker logs for decryption errors
 
 **Access denied errors:**
