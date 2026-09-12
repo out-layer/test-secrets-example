@@ -14,6 +14,16 @@ path = "src/main.rs"
 outlayer = "0.1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+wasi-http-client = "0.2"
+
+[features]
+# The published artefact carries `manifest.json` in its `outlayer.manifest`
+# section, which names the author's secret profile. A build from the GitHub
+# source (the Repo-accessor harness in tests/01 and 02) has no project to hold
+# an author secret under, and a manifest that names one would refuse every such
+# run — so the section is a feature `build.sh` turns on for the artefact that
+# is published as a project, and nothing else.
+manifest = []
 
 [profile.release]
 opt-level = "s"

@@ -15,6 +15,53 @@ This verifies:
 3. WASI environment variables injection works
 4. Proper WASI P2 stdin/stdout JSON format
 
+## Two secrets, one model
+
+A run of this project sees two kinds of secret:
+
+* **the author's** — `AUTHOR_SECRET`, from the profile the manifest names
+  (`manifest.json`: `author_secrets.profile = "author"`), stored by the project
+  owner under `Project(<owner>/test-secrets)` and decrypted into **every** run.
+  Its access condition is who may run the project at all: `AllowAll` for
+  everyone, a whitelist or DAO role for a circle. A declared profile nobody
+  stored refuses the run, with the message saying what to store.
+* **the caller's** — `SECRET`, `USER_SECRET`, …, from the profile the call names
+  in `secrets_ref`, under whichever account stored it, gated by that row's
+  condition. An owner hands a secret to their agents by storing it once under
+  their own account and whitelisting the agents' wallet accounts
+  (`update_access`); each agent names `{owner, profile}`.
+
+The answer reports both, plus who the run acts as and who paid:
+
+```json
+{ "author": true, "user": true, "sender": "you.testnet", "payer": "you.testnet",
+  "secrets": [ { "key": "AUTHOR_SECRET", "found": true, "value": "…" }, … ] }
+```
+
+`fetch_url` in the input performs one GET and reports its status: the manifest
+declares no `network` section, so a project with a manifest keeps unrestricted
+egress. (A manifest with `connector_id` would not — that is a connector's.)
+
+The manifest is a cargo feature. `./build.sh` turns it on for the artefact you
+publish as a project; the GitHub-source build the Repo-accessor tests below
+compile has no project to hold an author secret under, so it carries none.
+
+Publish: `./build.sh` → `outlayer upload target/wasm32-wasip2/release/test-secrets-example.wasm`
+→ `outlayer deploy test-secrets <FastFS URL>` → store the author profile:
+`outlayer secrets set '{"AUTHOR_SECRET":"…"}' --project <you>/test-secrets --profile author --access allow-all`.
+Until that profile exists every run of the published project is refused.
+
+The project-model matrix — author secret, delegation by whitelist, revocation,
+lookalike accounts, identity under a binding — is `tests/03_project_model.sh`
+(dry-run by default, `--apply` to spend). It is the one script here that needs
+the **parent repository** checked out around this directory: it sources
+`tests/lib/hos_common.sh` (testnet fixtures, the throttle, payment keys) and
+`tests/lib/secrets_common.sh` (the stored row, one run on chain or over HTTPS),
+which it shares with `tests/secrets_security_e2e.sh` there. Cloning this example
+on its own gives you `01` and `02`, which reach nothing outside it and stay the
+regression for repository-bound secrets
+(`tests/01_store_secrets.sh`, `tests/02_request_execution.sh`).
+
 ## Build
 
 ```bash
