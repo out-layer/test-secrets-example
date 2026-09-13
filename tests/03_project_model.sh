@@ -24,14 +24,12 @@
 #   A6  and narrowing that row to Whitelist[second owner] refuses a run signed by
 #       the publisher — the field cannot WIDEN reach, the owner's own condition
 #       still governs who may run
-#   A11 a BROKEN manifest section is ignored, not fatal. `manifest_from_wasm`
-#       answers None for a section over the size cap and None for one that is
-#       not valid JSON, so the run proceeds with NO author secret. On an
-#       ordinary project (no connector_id) that is benign and egress stays open.
-#       The plan expected "refused with a message"; the code does not do that,
-#       and asserting the plan's version would encode a refusal that does not
-#       exist. What must never happen is a trap, a hang, or a run that somehow
-#       still receives the author's secret
+#   A11 a BROKEN manifest section (over the size cap, not JSON, a profile that
+#       is empty or a number) is REFUSED with a message, never a trap — the
+#       plan's sentence. A run that proceeds without the author secret also
+#       proceeds without the author's admission gate, so an app opened to a
+#       circle runs for everyone the moment its manifest is unreadable. Red
+#       while the resolver ignores an unreadable section
 #   A3  the author's condition is the admission gate: whitelist the owner and a
 #       stranger's run is refused before it starts
 #   A2  the manifest names a profile nobody stored → refused, naming what to store
@@ -106,13 +104,31 @@ AGENT2_PAYMENT_KEY="${AGENT2_PAYMENT_KEY:-}"
 AGENT2_ACCOUNT="${AGENT2_ACCOUNT:-}"
 AGENT_WALLET_ID="${AGENT_WALLET_ID:-}"
 ASSET="${ASSET:-}"
-VARIANT_HASH="${VARIANT_HASH:-}"
-BROKEN_HASHES="${BROKEN_HASHES:-}"
-OWNER2_HASH="${OWNER2_HASH:-}"
-SECOND_OWNER="${SECOND_OWNER:-}"
+VARIANT_HASH="${VARIANT_HASH:-da3dfed7e525ce9c25cba72458699a89003f3fdfcf7863a5519de97712c8915d}"
+BROKEN_HASHES="${BROKEN_HASHES:-f6de6fe107b4823127be26f1c7aef75aa6a9ee171f18751134bd81783f23a15f 8a1d4b29b5371cbba983bdb9d5e8e6b9f1e4acf07abc73c27b3d2fe022ffd2b4 a4cfc6cda55bbd990c6fa18e0d3ba3c8c5672878f5cc28e6cc97a5ad4ea85a08}"
+# The published versions of zavodil.testnet/test-secrets and what each is,
+# read from their artefacts on 2026-09-13 (list_versions → source → wasm):
+#   223fd2dad15da336… ACTIVE — the current code with its manifest
+#   d39dfee85c008560… the same code built WITHOUT the manifest feature (A9 v1, C6's SWITCH_TO)
+#   da3dfed7e525ce9c… manifest with a connector_id (A10b)
+#   31b7894d960e703c… manifest naming owner zavodil2.testnet (A5/A6)
+#   f6de6fe107b48231… manifest section that is not JSON (A11)
+#   8a1d4b29b5371cbb… manifest with a numeric profile (A11)
+#   a4cfc6cda55bbd99… manifest with an empty profile (A11)
+#   d17ad0db7f53b8b9… an old build from March, no manifest — not used
+# A9's other half: a published, NON-ACTIVE version built WITHOUT the manifest.
+NOMANIFEST_HASH="${NOMANIFEST_HASH:-d39dfee85c0085604e516d37f83032ed98abba4a43322ed4b5c455b33c13c8f7}"
+OWNER2_HASH="${OWNER2_HASH:-31b7894d960e703c31086072663e9b23a24ccfbda491654c5d788625a37f5613}"
+SECOND_OWNER="${SECOND_OWNER:-zavodil2.testnet}"
 ROW_HELPER="$SCRIPT_DIR/../../../tests/lib/store_row_for_owner.py"
 DEPOSIT='0.1 NEAR'
-FETCH_URL="${FETCH_URL:-$RPC_URL/status}"
+# The guest's fetch target: the RPC's own /status, on the keyed host. RPC_URL
+# may already carry `?apiKey=…`, and a path cannot follow a query string, so
+# the URL is rebuilt here rather than appended to. The key stays out of this
+# suite's output (FETCH_SHOWN); the worker's own logs are the operator's.
+FETCH_KEY="${RPC_URL#*apiKey=}"; [[ "$FETCH_KEY" == "$RPC_URL" ]] && FETCH_KEY=""
+FETCH_URL="${FETCH_URL:-https://rpc.${NETWORK}.fastnear.com/status${FETCH_KEY:+?apiKey=$FETCH_KEY}}"
+FETCH_SHOWN="${FETCH_URL%%\?*}"
 
 MODE="${1:-}"
 if [[ "$MODE" != "--apply" ]]; then
@@ -187,7 +203,7 @@ run_as "$STRANGER"
 log "A10 the manifest declares no network, so egress stays unrestricted"
 run_as "$PARENT" "" "$(jq -nc --arg u "$FETCH_URL" '{fetch_url:$u}')"
 case "$(field .fetch)" in
-  200*) pass "A10 GET $FETCH_URL → $(field .fetch)" ;;
+  200*) pass "A10 GET $FETCH_SHOWN → $(field .fetch)" ;;
   *)    fail "A10 fetch answered '$(field .fetch)' (success=$RUN_OK err='$RUN_ERR')" ;;
 esac
 
@@ -317,30 +333,49 @@ else
   fi
 fi
 
+# ── A9, the v1 half: a version with NO manifest carries no author secret ─────
+#
+# Plan A9: "two versions: v1 without manifest, v2 with → author secret only
+# when v2 runs; pinned run of v1 (version_key) has none". The v2 half is the
+# VARIANT_HASH row above; this is v1.
+if [[ -z "$NOMANIFEST_HASH" ]]; then
+  skip "A9 (v1) needs NOMANIFEST_HASH — a published, non-active version built without the manifest feature"
+else
+  log "A9 a pinned version with NO manifest (${NOMANIFEST_HASH:0:16}…)"
+  run_as "$PARENT" "" '{"message":"a9-v1"}' "$NOMANIFEST_HASH"
+  if [[ "$RUN_OK" != "true" ]]; then
+    fail "A9 v1 did not run: success=$RUN_OK err='$(head -c 150 <<<"$RUN_ERR")'"
+  elif [[ "$(field .author)" == "false" ]]; then
+    pass "A9 v1 has no author secret — only the version whose manifest declares one receives it"
+  else
+    fail "A9 v1 received the author secret (author=$(field .author)) — the row reached a version whose manifest never named it"
+  fi
+fi
+
 # ── A11 a broken manifest section ────────────────────────────────────────────
 #
-# Judged on what the code does, not on what the plan assumed: an unreadable
-# section is IGNORED, so the run completes with no author secret. The failure
-# modes that matter are a trap, a run that never completes, and a run that
-# receives the author's secret anyway — the last would mean a broken manifest
-# still reached the resolver.
+# Judged on the plan's sentence: an unreadable section refuses the run with a
+# message that names the manifest. A trap, a hang, a run that receives the
+# author's secret anyway, and a run that proceeds WITHOUT it are all failures —
+# the last silently drops the admission gate along with the credential.
 if [[ -z "$BROKEN_HASHES" ]]; then
   skip "A11 needs BROKEN_HASHES (non-active versions with deliberately broken manifests)"
 else
   for BH in $BROKEN_HASHES; do
     log "A11 a pinned version whose manifest is broken (${BH:0:16}…)"
     run_as "$PARENT" "" '{"message":"a11"}' "$BH"
+    # The plan's sentence: a section over 64 KB, not JSON, or naming an empty
+    # or numeric profile is REFUSED with a message, never a trap. A run that
+    # proceeds without the author secret is not a lenient reading of that — it
+    # drops the author's admission gate with the secret, so an app the author
+    # opened to a circle runs for everyone the moment its manifest is unreadable.
     if [[ "$RUN_OK" == "absent" ]]; then
       fail "A11 ${BH:0:16}… never completed — a broken manifest must not hang the run"
     elif [[ "$RUN_OK" == "true" ]]; then
-      [[ "$(field .author)" == "false" ]] \
-        && pass "A11 ${BH:0:16}… ran with NO author secret — the unreadable section was ignored" \
-        || fail "A11 ${BH:0:16}… ran and still received the author's secret (author=$(field .author)) — a broken manifest reached the resolver"
+      fail "A11 ${BH:0:16}… RAN (author=$(field .author)) — the plan refuses a broken manifest; running without the author secret also runs without the author's admission gate"
     else
-      # A clean refusal is acceptable for the shapes that parse as JSON but
-      # carry an unusable profile: those can fail at author-resolution instead.
-      grep -qiE "author|manifest|profile" <<<"$RUN_ERR" \
-        && pass "A11 ${BH:0:16}… refused cleanly, naming the cause: $(head -c 110 <<<"$RUN_ERR")" \
+      grep -qi "manifest" <<<"$RUN_ERR" \
+        && pass "A11 ${BH:0:16}… refused, naming the cause: $(head -c 110 <<<"$RUN_ERR")" \
         || fail "A11 ${BH:0:16}… refused for an unrelated reason: $(head -c 150 <<<"$RUN_ERR")"
     fi
   done
@@ -380,9 +415,21 @@ run_as "$PARENT" "$PARENT/clash"
 # with nothing — if the merge dropped the clashing name and carried on, the run
 # would SUCCEED and that canary would be in the environment. Asserting only the
 # refusal above would not notice that change.
-[[ "$(secret_value USER_SECRET)" != "$CLASH_CANARY" ]] \
-  && pass "A7 and the profile's other key was withheld too — all or nothing" \
-  || fail "A7 the run delivered USER_SECRET from the clashing profile: the collision was dropped, not refused"
+# A refused run carries no environment at all, so "the other key is absent" is
+# true however the run failed — including for reasons that have nothing to do
+# with the collision. The claim that can fail is the opposite one: the run must
+# NOT have succeeded while quietly dropping the clashing name.
+if [[ "$RUN_OK" == "true" ]]; then
+  [[ "$(secret_value USER_SECRET)" != "$CLASH_CANARY" ]] \
+    && fail "A7 the run SUCCEEDED with the clashing profile: the collision was dropped, not refused" \
+    || fail "A7 the run succeeded and delivered USER_SECRET from the clashing profile"
+else
+  # "It did not run" is true of a lost transaction and of any unrelated refusal.
+  # The claim is narrower: it did not run BECAUSE of the collision.
+  [[ "$RUN_OK" == "false" ]] && grep -q "both define" <<<"$RUN_ERR" \
+    && pass "A7 the whole profile was withheld, not merely the clashing key — the run never ran" \
+    || fail "A7 the run did not happen, and not because of the collision: success=$RUN_OK err='$(head -c 150 <<<"$RUN_ERR")'"
+fi
 
 # ── U1/U2 the caller's own row ───────────────────────────────────────────────
 log "U1 the owner names their own row"
@@ -409,9 +456,11 @@ run_as "$MATCHER" "$PARENT/me"
   || fail "U6 $MATCHER: success=$RUN_OK user=$(field .user) err='$RUN_ERR'"
 for trap in "$PREFIX_TRAP" "$SUFFIX_TRAP"; do
   run_as "$trap" "$PARENT/me"
-  [[ "$RUN_OK" == "false" ]] \
-    && pass "U6 $trap refused" \
-    || fail "U6 $trap was ADMITTED by a whitelist naming $MATCHER — a substring match"
+  # The traps are separate accounts: an unfunded one, or a lost send, refuses
+  # exactly like a whitelist declining a substring. Only the condition counts.
+  [[ "$RUN_OK" == "false" ]] && grep -qiE "denied|permission|condition" <<<"$RUN_ERR" \
+    && pass "U6 $trap refused by the condition" \
+    || fail "U6 $trap: success=$RUN_OK err='$(head -c 150 <<<"$RUN_ERR")' (expected a refusal BY THE CONDITION)"
 done
 set_access "$PROJECT" me "$(whitelist "$PARENT")"
 
@@ -458,9 +507,9 @@ else
   if [[ -n "$AGENT2_PAYMENT_KEY" && -n "$AGENT2_ACCOUNT" ]]; then
     log "D5 a second agent"
     call_https "$AGENT2_PAYMENT_KEY" "$PROJECT" "$PARENT/me"
-    [[ "$RUN_OK" == "false" ]] \
-      && pass "D5 not in the list → refused" \
-      || fail "D5 the second agent read a row that names only the first"
+    [[ "$RUN_OK" == "false" ]] && grep -qiE "denied|permission|condition" <<<"$RUN_ERR" \
+      && pass "D5 not in the list → refused by the condition" \
+      || fail "D5 second agent: success=$RUN_OK err='$(head -c 150 <<<"$RUN_ERR")' (expected a refusal BY THE CONDITION)"
     set_access "$PROJECT" me "$(whitelist "$PARENT" "$AGENT_ACCOUNT" "$AGENT2_ACCOUNT")"
     call_https "$AGENT2_PAYMENT_KEY" "$PROJECT" "$PARENT/me"
     [[ "$RUN_OK" == "true" && "$(field .user)" == "true" ]] \
@@ -474,11 +523,29 @@ else
   if [[ -n "$ASSET" ]]; then
     log "D6 a grant naming the BOUND account instead of the wallet account"
     set_access "$PROJECT" me "$(whitelist "$PARENT" "$ASSET")"
-    call_https "$AGENT_PAYMENT_KEY" "$PROJECT" "$PARENT/me"
-    [[ "$RUN_OK" == "false" ]] \
-      && pass "D6 refused — grants name the payer, and a binding moves only the name the guest acts as" \
-      || fail "D6 a whitelist naming $ASSET admitted the wallet $AGENT_ACCOUNT"
+    # With use_bound_identity the guest's sender is $ASSET and the payer stays
+    # the wallet. Without it both are the wallet, and a refusal would say
+    # nothing about WHICH of the two the condition judged.
+    https_post "$AGENT_PAYMENT_KEY" "$PROJECT" \
+      "$(jq -nc --arg o "$PARENT" '{input:{message:"d6"}, secrets_ref:{account_id:$o, profile:"me"}, use_bound_identity:true}')"
+    if [[ "$RUN_OK" == "true" ]]; then
+      fail "D6 a whitelist naming the BOUND name $ASSET admitted the wallet $AGENT_ACCOUNT — the condition was judged against the sender, not the payer"
+    elif grep -qi "denied\|permission" <<<"$RUN_ERR"; then
+      pass "D6 refused BY THE CONDITION — grants name the payer, and a binding moves only the name the guest acts as"
+    else
+      fail "D6 refused for something else, which proves nothing about grants: $(head -c 140 <<<"$RUN_ERR")"
+    fi
+    # The control: the same key, the same call, the wallet named again. Without
+    # it a spent key or an exhausted quota would read as a working access rule.
     set_access "$PROJECT" me "$(whitelist "$PARENT" "$AGENT_ACCOUNT")"
+    https_post "$AGENT_PAYMENT_KEY" "$PROJECT" \
+      "$(jq -nc --arg o "$PARENT" '{input:{message:"d6-control"}, secrets_ref:{account_id:$o, profile:"me"}, use_bound_identity:true}')"
+    [[ "$RUN_OK" == "true" && "$(field .user)" == "true" ]] \
+      && pass "D6 and the same key runs once the row names the wallet — the refusal was the condition's" \
+      || fail "D6 the control call failed too ($RUN_OK, $(head -c 120 <<<"$RUN_ERR")): the refusal above proves nothing"
+    [[ "$(field .sender)" == "$ASSET" && "$(field .payer)" == "$AGENT_ACCOUNT" ]] \
+      && pass "D6 and the binding moved only the name: sender=$ASSET, payer=$AGENT_ACCOUNT" \
+      || fail "D6 sender='$(field .sender)' payer='$(field .payer)' — expected sender=$ASSET, payer=$AGENT_ACCOUNT"
   else
     skip "D6 needs ASSET (an account bound to the agent's wallet)"
   fi
@@ -489,18 +556,31 @@ else
   log "C1 the same grant against a connector ($CONNECTOR_PROJECT)"
   PROBE_CANARY="probe-$(openssl rand -hex 6)"
   store "$CONNECTOR_PROJECT" shared "$(jq -nc --arg v "$PROBE_CANARY" '{PROBE_TOKEN:$v}')" "whitelist:$PARENT,$AGENT_ACCOUNT"
-  WALLET_HDR=(); [[ -n "$AGENT_WALLET_ID" ]] && WALLET_HDR=(-H "X-Wallet-Id: $AGENT_WALLET_ID")
-  call_https "$AGENT_PAYMENT_KEY" "$CONNECTOR_PROJECT" "$PARENT/shared" '{"operation":"secret"}' "${WALLET_HDR[@]}"
+  # An EMPTY array's "[@]" is "unbound" to bash 3.2 under set -u, and this
+  # suite died here on a machine with no AGENT_WALLET_ID; the +-idiom below
+  # expands to nothing instead.
+  WALLET_HDR=(); [[ -n "${AGENT_WALLET_ID:-}" ]] && WALLET_HDR=(-H "X-Wallet-Id: $AGENT_WALLET_ID")
+  call_https "$AGENT_PAYMENT_KEY" "$CONNECTOR_PROJECT" "$PARENT/shared" '{"operation":"secret"}' ${WALLET_HDR[@]+"${WALLET_HDR[@]}"}
   if [[ "$RUN_OK" == "true" ]] && [[ "$(jq -r '.. | objects | select(.key? == "PROBE_TOKEN") | .found // empty' <<<"$RUN_OUT" | head -1)" == "true" ]]; then
     pass "C1 the connector reads the owner's row the agent named — one model"
   else
     fail "C1 success=$RUN_OK err='$RUN_ERR' out=$(head -c 200 <<<"$RUN_OUT")"
   fi
   set_access "$CONNECTOR_PROJECT" shared "$(whitelist "$PARENT")"
-  call_https "$AGENT_PAYMENT_KEY" "$CONNECTOR_PROJECT" "$PARENT/shared" '{"operation":"secret"}' "${WALLET_HDR[@]}"
-  [[ "$RUN_OK" == "false" ]] \
-    && pass "C1 and revoked the same way" \
-    || fail "C1 after revocation the connector still read the row"
+  call_https "$AGENT_PAYMENT_KEY" "$CONNECTOR_PROJECT" "$PARENT/shared" '{"operation":"secret"}' ${WALLET_HDR[@]+"${WALLET_HDR[@]}"}
+  # A connector call refused for the DAY'S QUOTA looks exactly like one refused
+  # by the condition, and the admitted call just above spends one of that
+  # quota. Reading the reason is the whole difference between a test and a
+  # coin toss.
+  if [[ "$RUN_OK" == "true" ]]; then
+    fail "C1 after revocation the connector still read the row"
+  elif grep -qi "quota" <<<"$RUN_ERR"; then
+    skip "C1 revocation half: the wallet's daily connector quota is spent ($(head -c 90 <<<"$RUN_ERR")) — this says nothing about the grant"
+  elif grep -qi "denied\|permission" <<<"$RUN_ERR"; then
+    pass "C1 and revoked the same way, refused by the condition"
+  else
+    fail "C1 refused for an unrelated reason: $(head -c 140 <<<"$RUN_ERR")"
+  fi
   fi
 fi
 
