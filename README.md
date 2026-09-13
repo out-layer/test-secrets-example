@@ -62,6 +62,15 @@ on its own gives you `01` and `02`, which reach nothing outside it and stay the
 regression for repository-bound secrets
 (`tests/01_store_secrets.sh`, `tests/02_request_execution.sh`).
 
+`02` is the one that matters after changing this source: it builds the example
+FROM GITHUB under the `Repo` accessor, so it catches a build that no longer
+compiles or an answer whose shape moved. It needs nothing but the profiles
+already stored on chain and a key for each account in `tests/test_config.sh`.
+`01`, which stores those profiles, talks to the keystore directly and so needs
+`KEYSTORE_BASE_URL` in `.env` to be current — a keystore redeploy changes its
+app id and therefore its host, and a stale one fails with a connection error
+before anything is stored.
+
 ## Build
 
 ```bash
