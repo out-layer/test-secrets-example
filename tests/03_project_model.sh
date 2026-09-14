@@ -11,7 +11,8 @@
 #                  condition its owner stored; a whitelist is how an owner hands
 #                  one credential to their agents and takes it back
 #
-# What each row pins (letters follow the plan's catalogue):
+# What each row pins (A the author's secret, U the caller's own, D delegation,
+# C a connector):
 #   A1  any caller, no secrets_ref → the author's secret is there, nothing else
 #   A10 a manifest with no `network` section leaves egress unrestricted, and a
 #       manifest that declares a connector_id closes it: same project, same
@@ -25,11 +26,10 @@
 #       the publisher — the field cannot WIDEN reach, the owner's own condition
 #       still governs who may run
 #   A11 a BROKEN manifest section (over the size cap, not JSON, a profile that
-#       is empty or a number) is REFUSED with a message, never a trap — the
-#       plan's sentence. A run that proceeds without the author secret also
-#       proceeds without the author's admission gate, so an app opened to a
-#       circle runs for everyone the moment its manifest is unreadable. Red
-#       while the resolver ignores an unreadable section
+#       is empty or a number) is REFUSED with a message, never a trap. A run
+#       that proceeded without the author secret would also proceed without
+#       the author's admission gate, and an app opened to a circle would run
+#       for everyone the moment its manifest became unreadable
 #   A3  the author's condition is the admission gate: whitelist the owner and a
 #       stranger's run is refused before it starts
 #   A2  the manifest names a profile nobody stored → refused, naming what to store
@@ -80,9 +80,10 @@
 #                        secrets_ref on the connector path is deployed
 #
 # A2 deletes the `author` profile and stores it again; while it is absent every
-# run of the project is refused, including secret_access_conditions_e2e.sh. An
-# EXIT trap restores it if this script dies in between — check the last lines
-# of the output if a run was interrupted.
+# run of the project is refused, including secret_access_conditions_e2e.sh. A3
+# narrows that row, U6/U3/D* edit the `me` row. An EXIT trap puts every one of
+# them back if this script dies in between — check the last lines of the
+# output if a run was interrupted.
 #
 # Money: ~12 on-chain runs at 0.1 NEAR attached (0.001 charged, rest refunded),
 # a few HTTPS calls on the agent's key, three storage deposits, two throwaway
@@ -106,8 +107,8 @@ AGENT_WALLET_ID="${AGENT_WALLET_ID:-}"
 ASSET="${ASSET:-}"
 VARIANT_HASH="${VARIANT_HASH:-da3dfed7e525ce9c25cba72458699a89003f3fdfcf7863a5519de97712c8915d}"
 BROKEN_HASHES="${BROKEN_HASHES:-f6de6fe107b4823127be26f1c7aef75aa6a9ee171f18751134bd81783f23a15f 8a1d4b29b5371cbba983bdb9d5e8e6b9f1e4acf07abc73c27b3d2fe022ffd2b4 a4cfc6cda55bbd990c6fa18e0d3ba3c8c5672878f5cc28e6cc97a5ad4ea85a08}"
-# The published versions of zavodil.testnet/test-secrets and what each is,
-# read from their artefacts on 2026-09-13 (list_versions → source → wasm):
+# The published versions of zavodil.testnet/test-secrets and what each is
+# (read from their artefacts: list_versions → source → wasm):
 #   223fd2dad15da336… ACTIVE — the current code with its manifest
 #   d39dfee85c008560… the same code built WITHOUT the manifest feature (A9 v1, C6's SWITCH_TO)
 #   da3dfed7e525ce9c… manifest with a connector_id (A10b)
@@ -122,13 +123,11 @@ OWNER2_HASH="${OWNER2_HASH:-31b7894d960e703c31086072663e9b23a24ccfbda491654c5d78
 SECOND_OWNER="${SECOND_OWNER:-zavodil2.testnet}"
 ROW_HELPER="$SCRIPT_DIR/../../../tests/lib/store_row_for_owner.py"
 DEPOSIT='0.1 NEAR'
-# The guest's fetch target: the RPC's own /status, on the keyed host. RPC_URL
-# may already carry `?apiKey=…`, and a path cannot follow a query string, so
-# the URL is rebuilt here rather than appended to. The key stays out of this
-# suite's output (FETCH_SHOWN); the worker's own logs are the operator's.
-FETCH_KEY="${RPC_URL#*apiKey=}"; [[ "$FETCH_KEY" == "$RPC_URL" ]] && FETCH_KEY=""
-FETCH_URL="${FETCH_URL:-https://rpc.${NETWORK}.fastnear.com/status${FETCH_KEY:+?apiKey=$FETCH_KEY}}"
-FETCH_SHOWN="${FETCH_URL%%\?*}"
+# The guest's fetch target. It travels in `input_data` of a PUBLIC transaction
+# and is copied into the `execution_requested` event, so it must carry nothing:
+# the NEAR public RPC's own /status, unkeyed. (RPC_URL, which this suite's own
+# calls go through, carries an API key and is never the guest's target.)
+FETCH_URL="${FETCH_URL:-https://rpc.${NETWORK}.near.org/status}"
 
 MODE="${1:-}"
 if [[ "$MODE" != "--apply" ]]; then
@@ -137,7 +136,6 @@ if [[ "$MODE" != "--apply" ]]; then
   exit 0
 fi
 hos_require
-command -v outlayer >/dev/null || { echo "✗ the outlayer CLI is not on PATH" >&2; exit 1; }
 PROJECT="${PROJECT:-$PARENT/test-secrets}"
 
 # The callers. `pat` is the whitelisted one; `xpat` puts a character before it
@@ -151,6 +149,18 @@ STRANGER="$PREFIX_TRAP"
 # The fixture helpers and the two run helpers are shared with
 # tests/secrets_security_e2e.sh — see tests/lib/secrets_common.sh.
 source "$SCRIPT_DIR/../../../tests/lib/secrets_common.sh"
+# After the source: secrets_common prefers the local build over a bare name,
+# and a machine with only that build has nothing called `outlayer` on PATH.
+[[ -x "$OUTLAYER_BIN_PATH" ]] || { echo "✗ the outlayer CLI was not found (OUTLAYER_BIN=${OUTLAYER_BIN:-outlayer})" >&2; exit 1; }
+
+# A refusal BY THE ROW'S CONDITION, and not by the author's admission gate.
+# The author row is AllowAll except inside A3, and a gate left narrowed would
+# refuse every stranger with the same word "denied" — so a refusal that names
+# the author's secrets is not the verdict a caller-row test is after.
+refused_by_condition() {
+  [[ "$RUN_OK" == "false" ]] && grep -qiE "denied|permission|condition" <<<"$RUN_ERR" \
+    && ! grep -q "author's secrets" <<<"$RUN_ERR"
+}
 
 # ── fixture ──────────────────────────────────────────────────────────────────
 log "Fixture: the project, the callers, the rows"
@@ -167,16 +177,46 @@ make_account "$SUFFIX_TRAP" "$MATCHER" '1 NEAR'
 
 AUTHOR_CANARY="author-$(openssl rand -hex 6)"
 USER_CANARY="user-$(openssl rand -hex 6)"
-# While A2 has the author row deleted, an interrupted run must not leave the
-# project refusing everything: put the row back on the way out.
+# What an interrupted run must not leave behind: the author row deleted (A2)
+# or narrowed (A3) — the project would refuse everyone — and the `me` row
+# under a condition some row set (U6, U3, D*). Each row flags what it edits;
+# the way out puts every flagged row back.
 AUTHOR_ABSENT=false
-restore_author() {
+AUTHOR_NARROWED=false
+ME_CHANGED=false
+SHARED_GRANTED=false     # C1 grants the agent on the connector's `shared` row
+OWNER2_NARROWED=false    # A6 narrows the second owner's author row
+# Each restore runs in a SUBSHELL: the helpers end the shell on failure, and
+# inside a trap that would end the trap with the rest of it undone. Every
+# failure goes to stderr — the first thing to read after an interrupted run.
+on_exit() {
   if [[ "$AUTHOR_ABSENT" == true ]]; then
     note "restoring the author profile A2 had deleted"
-    store "$PROJECT" author "$(jq -nc --arg v "$AUTHOR_CANARY" '{AUTHOR_SECRET:$v}')" allow-all && AUTHOR_ABSENT=false
+    ( store "$PROJECT" author "$(jq -nc --arg v "$AUTHOR_CANARY" '{AUTHOR_SECRET:$v}')" allow-all ) \
+      || echo "✗ the author row was NOT restored — every run of $PROJECT is refused until it is stored" >&2
+  elif [[ "$AUTHOR_NARROWED" == true ]]; then
+    note "reopening the author row A3 had narrowed"
+    ( set_access "$PROJECT" author '"AllowAll"' ) \
+      || echo "✗ the author row was NOT reopened — strangers are refused until it is" >&2
+  fi
+  if [[ "$ME_CHANGED" == true ]]; then
+    note "putting the me row back to Whitelist[$PARENT]"
+    ( set_access "$PROJECT" me "$(whitelist "$PARENT")" ) \
+      || echo "✗ the me row was NOT restored to Whitelist[$PARENT]" >&2
+  fi
+  if [[ "$SHARED_GRANTED" == true ]]; then
+    note "revoking the agent on $CONNECTOR_PROJECT/shared"
+    ( set_access "$CONNECTOR_PROJECT" shared "$(whitelist "$PARENT")" ) \
+      || echo "✗ $CONNECTOR_PROJECT/shared still grants the agent — revoke by hand" >&2
+  fi
+  if [[ "$OWNER2_NARROWED" == true ]]; then
+    note "reopening $SECOND_OWNER's author row"
+    ( as_second update_access "$(jq -nc --argjson a "$(accessor_json "$PROJECT")" \
+        '{accessor:$a, profile:"author", new_access:"AllowAll"}')" '0.1 NEAR' ) \
+      || echo "✗ $SECOND_OWNER's author row is still narrowed — A5 will refuse until it is AllowAll" >&2
   fi
 }
-trap restore_author EXIT
+trap on_exit EXIT
 store "$PROJECT" author "$(jq -nc --arg v "$AUTHOR_CANARY" '{AUTHOR_SECRET:$v}')" allow-all
 store "$PROJECT" me     "$(jq -nc --arg v "$USER_CANARY"   '{USER_SECRET:$v}')"   "whitelist:$PARENT"
 CLASH_CANARY="clash-$(openssl rand -hex 6)"
@@ -203,7 +243,7 @@ run_as "$STRANGER"
 log "A10 the manifest declares no network, so egress stays unrestricted"
 run_as "$PARENT" "" "$(jq -nc --arg u "$FETCH_URL" '{fetch_url:$u}')"
 case "$(field .fetch)" in
-  200*) pass "A10 GET $FETCH_SHOWN → $(field .fetch)" ;;
+  200*) pass "A10 GET $FETCH_URL → $(field .fetch)" ;;
   *)    fail "A10 fetch answered '$(field .fetch)' (success=$RUN_OK err='$RUN_ERR')" ;;
 esac
 
@@ -223,10 +263,14 @@ else
   if [[ "$RUN_OK" == "absent" ]]; then
     fail "A10b the pinned run never completed — check the version's URL actually serves its bytes"
   else
+    # The refusal must be the ALLOWLIST's. A target that is down, or a DNS
+    # miss inside the enclave, also answers something other than 200, and
+    # would pass a row that only asked "not 200".
     case "$(field .fetch)" in
       200*) fail "A10b egress was ALLOWED ($(field .fetch)) under a manifest declaring a connector_id and no network list" ;;
       "")   fail "A10b the run reported no fetch at all (success=$RUN_OK err='$RUN_ERR')" ;;
-      *)    pass "A10b egress refused by the artefact's own manifest: $(field .fetch | head -c 90)" ;;
+      *allowlist*) pass "A10b egress refused by the artefact's own manifest: $(field .fetch | head -c 90)" ;;
+      *)    fail "A10b the fetch failed, but not by the allowlist: $(field .fetch | head -c 120) — a dead target would read the same" ;;
     esac
     # A9: the same pinned artefact still names the author's profile, so the
     # secret must arrive. Without this the row above would also pass for a
@@ -315,8 +359,9 @@ else
     # `update_access` is payable: a condition is stored bytes, and this one
     # names an account where the row named nobody. The excess returns in the
     # same transaction, so a round tenth covers a one-account whitelist.
+    OWNER2_NARROWED=true
     as_second update_access "$(jq -nc --argjson a "$(accessor_json "$PROJECT")" --arg o "$SECOND_OWNER" \
-      '{accessor:$a, profile:"author", new_access:{Whitelist:{accounts:[$o]}}}')" '0.1 NEAR' 
+      '{accessor:$a, profile:"author", new_access:{Whitelist:{accounts:[$o]}}}')" '0.1 NEAR'
     sleep 6
     run_as "$PARENT" "" '{"message":"a6"}' "$OWNER2_HASH"
     if [[ "$RUN_OK" == "false" ]] && grep -qi "denied" <<<"$RUN_ERR"; then
@@ -328,16 +373,16 @@ else
     fi
     as_second update_access "$(jq -nc --argjson a "$(accessor_json "$PROJECT")" \
       '{accessor:$a, profile:"author", new_access:"AllowAll"}')" '0.1 NEAR' \
-      && note "A6 restored that row to AllowAll" \
+      && { OWNER2_NARROWED=false; note "A6 restored that row to AllowAll"; } \
       || fail "A6 COULD NOT RESTORE the row to AllowAll — A5 will refuse until it is put back"
   fi
 fi
 
 # ── A9, the v1 half: a version with NO manifest carries no author secret ─────
 #
-# Plan A9: "two versions: v1 without manifest, v2 with → author secret only
-# when v2 runs; pinned run of v1 (version_key) has none". The v2 half is the
-# VARIANT_HASH row above; this is v1.
+# Two versions, v1 without a manifest and v2 with one: the author secret
+# arrives only when v2 runs, and a pinned run of v1 has none. The v2 half is
+# the VARIANT_HASH row above; this is v1.
 if [[ -z "$NOMANIFEST_HASH" ]]; then
   skip "A9 (v1) needs NOMANIFEST_HASH — a published, non-active version built without the manifest feature"
 else
@@ -354,8 +399,8 @@ fi
 
 # ── A11 a broken manifest section ────────────────────────────────────────────
 #
-# Judged on the plan's sentence: an unreadable section refuses the run with a
-# message that names the manifest. A trap, a hang, a run that receives the
+# An unreadable section refuses the run with a message that names the
+# manifest. A trap, a hang, a run that receives the
 # author's secret anyway, and a run that proceeds WITHOUT it are all failures —
 # the last silently drops the admission gate along with the credential.
 if [[ -z "$BROKEN_HASHES" ]]; then
@@ -364,15 +409,15 @@ else
   for BH in $BROKEN_HASHES; do
     log "A11 a pinned version whose manifest is broken (${BH:0:16}…)"
     run_as "$PARENT" "" '{"message":"a11"}' "$BH"
-    # The plan's sentence: a section over 64 KB, not JSON, or naming an empty
-    # or numeric profile is REFUSED with a message, never a trap. A run that
-    # proceeds without the author secret is not a lenient reading of that — it
-    # drops the author's admission gate with the secret, so an app the author
-    # opened to a circle runs for everyone the moment its manifest is unreadable.
+    # A section over 64 KB, not JSON, or naming an empty or numeric profile
+    # is REFUSED with a message, never a trap. A run that proceeds without the
+    # author secret drops the author's admission gate with the secret, so an
+    # app the author opened to a circle would run for everyone the moment its
+    # manifest became unreadable.
     if [[ "$RUN_OK" == "absent" ]]; then
       fail "A11 ${BH:0:16}… never completed — a broken manifest must not hang the run"
     elif [[ "$RUN_OK" == "true" ]]; then
-      fail "A11 ${BH:0:16}… RAN (author=$(field .author)) — the plan refuses a broken manifest; running without the author secret also runs without the author's admission gate"
+      fail "A11 ${BH:0:16}… RAN (author=$(field .author)) — a broken manifest must refuse; running without the author secret also runs without the author's admission gate"
     else
       grep -qi "manifest" <<<"$RUN_ERR" \
         && pass "A11 ${BH:0:16}… refused, naming the cause: $(head -c 110 <<<"$RUN_ERR")" \
@@ -383,6 +428,7 @@ fi
 
 # ── A3 the author's condition is the admission gate ──────────────────────────
 log "A3 whitelist the author's row to the owner: strangers cannot run the project"
+AUTHOR_NARROWED=true
 set_access "$PROJECT" author "$(whitelist "$PARENT")"
 run_as "$STRANGER"
 [[ "$RUN_OK" == "false" ]] && grep -qi "denied" <<<"$RUN_ERR" \
@@ -393,6 +439,14 @@ run_as "$PARENT"
   && pass "A3 the owner still runs" \
   || fail "A3 owner: success=$RUN_OK author=$(field .author) err='$RUN_ERR'"
 set_access "$PROJECT" author '"AllowAll"'
+AUTHOR_NARROWED=false
+# The control every refusal row below leans on: with the gate reopened, a
+# stranger naming nothing runs again. Without this, a gate left narrowed would
+# make U2, U6, D4 and D5 pass for the wrong reason.
+run_as "$STRANGER"
+[[ "$RUN_OK" == "true" && "$(field .author)" == "true" ]] \
+  && pass "A3 and the gate is open again: a stranger naming nothing runs" \
+  || fail "A3 THE GATE STAYED NARROWED — every refusal below would be the gate's, not the row's: success=$RUN_OK err='$RUN_ERR'"
 
 # ── A2 a declared profile nobody stored ──────────────────────────────────────
 log "A2 the manifest names a profile that is not on chain"
@@ -443,12 +497,13 @@ run_as "$PARENT" "$PARENT/me"
 
 log "U2 a stranger names the owner's row"
 run_as "$STRANGER" "$PARENT/me"
-[[ "$RUN_OK" == "false" ]] && grep -qi "denied" <<<"$RUN_ERR" \
+refused_by_condition \
   && pass "U2 refused by the condition: $RUN_ERR" \
-  || fail "U2 success=$RUN_OK user=$(field .user) err='$RUN_ERR'"
+  || fail "U2 success=$RUN_OK user=$(field .user) err='$RUN_ERR' (expected a refusal BY THE ROW'S CONDITION)"
 
 # ── U6 lookalikes ────────────────────────────────────────────────────────────
 log "U6 whitelist $MATCHER: lookalikes are not it"
+ME_CHANGED=true
 set_access "$PROJECT" me "$(whitelist "$PARENT" "$MATCHER")"
 run_as "$MATCHER" "$PARENT/me"
 [[ "$RUN_OK" == "true" && "$(field .user)" == "true" ]] \
@@ -458,26 +513,30 @@ for trap in "$PREFIX_TRAP" "$SUFFIX_TRAP"; do
   run_as "$trap" "$PARENT/me"
   # The traps are separate accounts: an unfunded one, or a lost send, refuses
   # exactly like a whitelist declining a substring. Only the condition counts.
-  [[ "$RUN_OK" == "false" ]] && grep -qiE "denied|permission|condition" <<<"$RUN_ERR" \
+  refused_by_condition \
     && pass "U6 $trap refused by the condition" \
     || fail "U6 $trap: success=$RUN_OK err='$(head -c 150 <<<"$RUN_ERR")' (expected a refusal BY THE CONDITION)"
 done
 set_access "$PROJECT" me "$(whitelist "$PARENT")"
+ME_CHANGED=false
 
 # ── U3 the cost of AllowAll ──────────────────────────────────────────────────
 log "U3 AllowAll on a personal row"
+ME_CHANGED=true
 set_access "$PROJECT" me '"AllowAll"'
 run_as "$STRANGER" "$PARENT/me"
 [[ "$RUN_OK" == "true" && "$(field .user)" == "true" ]] \
   && pass "U3 a stranger reads it — which is what AllowAll says, and why the interfaces default to a whitelist" \
   || fail "U3 stranger: success=$RUN_OK user=$(field .user) err='$RUN_ERR'"
 set_access "$PROJECT" me "$(whitelist "$PARENT")"
+ME_CHANGED=false
 
 # ── D* delegation to an agent's wallet ───────────────────────────────────────
 if [[ -z "$AGENT_PAYMENT_KEY" || -z "$AGENT_ACCOUNT" ]]; then
   skip "D1/D4/D5/D6/C1 need AGENT_PAYMENT_KEY and AGENT_ACCOUNT (a custody wallet's key and implicit account)"
 else
   log "D1 grant the agent's wallet account; the agent names the owner's row over HTTPS"
+  ME_CHANGED=true   # the D rows leave the agent granted; the way out revokes it
   set_access "$PROJECT" me "$(whitelist "$PARENT" "$AGENT_ACCOUNT")"
   call_https "$AGENT_PAYMENT_KEY" "$PROJECT" "$PARENT/me"
   [[ "$RUN_OK" == "true" && "$(field .user)" == "true" && "$(secret_value USER_SECRET)" == "$USER_CANARY" ]] \
@@ -495,9 +554,9 @@ else
     && pass "D4 update_access left the ciphertext byte-identical" \
     || fail "D4 the ciphertext changed on an access update"
   call_https "$AGENT_PAYMENT_KEY" "$PROJECT" "$PARENT/me"
-  [[ "$RUN_OK" == "false" ]] && grep -qi "denied" <<<"$RUN_ERR" \
+  refused_by_condition \
     && pass "D4 the agent is refused: $RUN_ERR" \
-    || fail "D4 success=$RUN_OK user=$(field .user) err='$RUN_ERR'"
+    || fail "D4 success=$RUN_OK user=$(field .user) err='$RUN_ERR' (expected a refusal BY THE ROW'S CONDITION)"
   set_access "$PROJECT" me "$(whitelist "$PARENT" "$AGENT_ACCOUNT")"
   call_https "$AGENT_PAYMENT_KEY" "$PROJECT" "$PARENT/me"
   [[ "$RUN_OK" == "true" && "$(field .user)" == "true" ]] \
@@ -507,7 +566,7 @@ else
   if [[ -n "$AGENT2_PAYMENT_KEY" && -n "$AGENT2_ACCOUNT" ]]; then
     log "D5 a second agent"
     call_https "$AGENT2_PAYMENT_KEY" "$PROJECT" "$PARENT/me"
-    [[ "$RUN_OK" == "false" ]] && grep -qiE "denied|permission|condition" <<<"$RUN_ERR" \
+    refused_by_condition \
       && pass "D5 not in the list → refused by the condition" \
       || fail "D5 second agent: success=$RUN_OK err='$(head -c 150 <<<"$RUN_ERR")' (expected a refusal BY THE CONDITION)"
     set_access "$PROJECT" me "$(whitelist "$PARENT" "$AGENT_ACCOUNT" "$AGENT2_ACCOUNT")"
@@ -555,6 +614,7 @@ else
   else
   log "C1 the same grant against a connector ($CONNECTOR_PROJECT)"
   PROBE_CANARY="probe-$(openssl rand -hex 6)"
+  SHARED_GRANTED=true
   store "$CONNECTOR_PROJECT" shared "$(jq -nc --arg v "$PROBE_CANARY" '{PROBE_TOKEN:$v}')" "whitelist:$PARENT,$AGENT_ACCOUNT"
   # An EMPTY array's "[@]" is "unbound" to bash 3.2 under set -u, and this
   # suite died here on a machine with no AGENT_WALLET_ID; the +-idiom below
@@ -567,6 +627,7 @@ else
     fail "C1 success=$RUN_OK err='$RUN_ERR' out=$(head -c 200 <<<"$RUN_OUT")"
   fi
   set_access "$CONNECTOR_PROJECT" shared "$(whitelist "$PARENT")"
+  SHARED_GRANTED=false
   call_https "$AGENT_PAYMENT_KEY" "$CONNECTOR_PROJECT" "$PARENT/shared" '{"operation":"secret"}' ${WALLET_HDR[@]+"${WALLET_HDR[@]}"}
   # A connector call refused for the DAY'S QUOTA looks exactly like one refused
   # by the condition, and the admitted call just above spends one of that
