@@ -78,6 +78,11 @@
 #                        `outlayer upload`, then `add_version set_active:false`.
 #   RUN_C1=0             skip C1 until the coordinator that honours a body
 #                        secrets_ref on the connector path is deployed
+#   FRESH_CONNECTOR_AGENT=1   mint a wallet and a payment key for the connector
+#                        rows, so they run on an UNSPENT daily counter. The
+#                        allowance grows with a wallet's age, so a minted one
+#                        carries the floor — enough for C1, and it costs a
+#                        payment key's deposit
 #
 # A2 deletes the `author` profile and stores it again; while it is absent every
 # run of the project is refused, including secret_access_conditions_e2e.sh. A3
@@ -614,29 +619,55 @@ else
   else
   log "C1 the same grant against a connector ($CONNECTOR_PROJECT)"
   PROBE_CANARY="probe-$(openssl rand -hex 6)"
+  # The connector rows are the only ones here that spend a daily quota, and the
+  # quota belongs to the wallet's age. FRESH_CONNECTOR_AGENT=1 mints a wallet
+  # with an unspent counter for them; without it they run on the agent the
+  # delegation rows used, whose counter those rows may already have spent.
+  C1_KEY="$AGENT_PAYMENT_KEY"; C1_ACCOUNT="$AGENT_ACCOUNT"
+  C1_MINT_FAILED=false
+  if [[ "${FRESH_CONNECTOR_AGENT:-0}" == "1" ]]; then
+    if mint_agent_wallet; then
+      C1_KEY="$MINTED_PAYMENT_KEY"; C1_ACCOUNT="$MINTED_ACCOUNT"
+    else
+      C1_MINT_FAILED=true
+    fi
+  fi
   SHARED_GRANTED=true
-  store "$CONNECTOR_PROJECT" shared "$(jq -nc --arg v "$PROBE_CANARY" '{PROBE_TOKEN:$v}')" "whitelist:$PARENT,$AGENT_ACCOUNT"
+  store "$CONNECTOR_PROJECT" shared "$(jq -nc --arg v "$PROBE_CANARY" '{PROBE_TOKEN:$v}')" "whitelist:$PARENT,$C1_ACCOUNT"
   # An EMPTY array's "[@]" is "unbound" to bash 3.2 under set -u, and this
   # suite died here on a machine with no AGENT_WALLET_ID; the +-idiom below
   # expands to nothing instead.
   WALLET_HDR=(); [[ -n "${AGENT_WALLET_ID:-}" ]] && WALLET_HDR=(-H "X-Wallet-Id: $AGENT_WALLET_ID")
-  call_https "$AGENT_PAYMENT_KEY" "$CONNECTOR_PROJECT" "$PARENT/shared" '{"operation":"secret"}' ${WALLET_HDR[@]+"${WALLET_HDR[@]}"}
+  C1_QUOTA=false
+  call_https "$C1_KEY" "$CONNECTOR_PROJECT" "$PARENT/shared" '{"operation":"secret"}' ${WALLET_HDR[@]+"${WALLET_HDR[@]}"}
   if [[ "$RUN_OK" == "true" ]] && [[ "$(jq -r '.. | objects | select(.key? == "PROBE_TOKEN") | .found // empty' <<<"$RUN_OUT" | head -1)" == "true" ]]; then
     pass "C1 the connector reads the owner's row the agent named — one model"
+  elif quota_refused "$RUN_ERR"; then
+    C1_QUOTA=true
+    [[ "$C1_MINT_FAILED" == true ]] \
+      && skip "C1 FRESH_CONNECTOR_AGENT=1 was asked for but the mint failed (its reason is above), so the row ran on the spent counter of $AGENT_ACCOUNT" \
+      || skip "C1 the wallet spent its connector calls for the day ($(head -c 90 <<<"$RUN_ERR")) — run with FRESH_CONNECTOR_AGENT=1 for an unspent counter"
   else
     fail "C1 success=$RUN_OK err='$RUN_ERR' out=$(head -c 200 <<<"$RUN_OUT")"
   fi
   set_access "$CONNECTOR_PROJECT" shared "$(whitelist "$PARENT")"
   SHARED_GRANTED=false
-  call_https "$AGENT_PAYMENT_KEY" "$CONNECTOR_PROJECT" "$PARENT/shared" '{"operation":"secret"}' ${WALLET_HDR[@]+"${WALLET_HDR[@]}"}
+  if [[ "$C1_QUOTA" == "true" ]]; then
+    skip "C1 revocation half: the same spent counter would answer before the condition"
+    RUN_OK=skipped
+  else
+    call_https "$C1_KEY" "$CONNECTOR_PROJECT" "$PARENT/shared" '{"operation":"secret"}' ${WALLET_HDR[@]+"${WALLET_HDR[@]}"}
+  fi
   # A connector call refused for the DAY'S QUOTA looks exactly like one refused
   # by the condition, and the admitted call just above spends one of that
   # quota. Reading the reason is the whole difference between a test and a
   # coin toss.
-  if [[ "$RUN_OK" == "true" ]]; then
+  if [[ "$RUN_OK" == "skipped" ]]; then
+    :
+  elif [[ "$RUN_OK" == "true" ]]; then
     fail "C1 after revocation the connector still read the row"
-  elif grep -qi "quota" <<<"$RUN_ERR"; then
-    skip "C1 revocation half: the wallet's daily connector quota is spent ($(head -c 90 <<<"$RUN_ERR")) — this says nothing about the grant"
+  elif quota_refused "$RUN_ERR"; then
+    skip "C1 revocation half: the wallet's connector calls for the day ran out ($(head -c 90 <<<"$RUN_ERR")) — this says nothing about the grant"
   elif grep -qi "denied\|permission" <<<"$RUN_ERR"; then
     pass "C1 and revoked the same way, refused by the condition"
   else
